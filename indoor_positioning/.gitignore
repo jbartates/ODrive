@@ -4,8 +4,8 @@ config/marker_map.yaml
 config/camera_calibration.yaml
 
 # Generated/captured artefacts
-markers/
-calib_images/
+/markers/
+/calib_images/
 *.jsonl
 pose_log*
 
