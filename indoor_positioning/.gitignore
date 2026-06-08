@@ -1,0 +1,18 @@
+# Local config copied from the *.example.yaml templates
+config/config.yaml
+config/marker_map.yaml
+config/camera_calibration.yaml
+
+# Generated/captured artefacts
+markers/
+calib_images/
+*.jsonl
+pose_log*
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/

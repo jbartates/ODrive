@@ -1,0 +1,40 @@
+# Known world poses of every fiducial marker.
+# Copy to marker_map.yaml and fill in your room's measurements.
+#
+# Each marker's local frame (OpenCV convention): origin at the marker
+# centre, +x right, +y up, +z pointing OUT of the printed face toward the
+# camera that reads it.
+#
+# Two ways to specify orientation:
+#   * yaw_deg:          convenient for markers on vertical walls. It is the
+#                       heading of the marker's outward normal (+z) measured
+#                       CCW from the world +x axis, about the world +z.
+#   * rotation_matrix:  full 3x3 if you need pitch/roll (e.g. ceiling tags).
+#
+# Positions are in metres in the world/map frame (+z up).
+
+markers:
+  # --- markers on the four walls of a 6 m x 4 m room ---
+  - id: 0
+    position: [0.0, 2.0, 1.5]     # west wall, facing +x (into the room)
+    yaw_deg: 0
+
+  - id: 1
+    position: [6.0, 2.0, 1.5]     # east wall, facing -x
+    yaw_deg: 180
+
+  - id: 2
+    position: [3.0, 0.0, 1.5]     # south wall, facing +y
+    yaw_deg: 90
+
+  - id: 3
+    position: [3.0, 4.0, 1.5]     # north wall, facing -y
+    yaw_deg: 270
+
+  # --- a ceiling marker (facing straight down, -z) via rotation_matrix ---
+  - id: 4
+    position: [3.0, 2.0, 2.6]
+    rotation_matrix:
+      - [1.0, 0.0, 0.0]
+      - [0.0, -1.0, 0.0]
+      - [0.0, 0.0, -1.0]

@@ -1,0 +1,6 @@
+# Runtime dependencies for the indoor positioning system.
+# On a Raspberry Pi 4 (64-bit Raspberry Pi OS) these all ship as prebuilt
+# wheels, so `pip install -r requirements.txt` is quick.
+numpy>=1.21
+opencv-contrib-python>=4.6     # contrib build is required for cv2.aruco
+PyYAML>=5.4

@@ -1,0 +1,15 @@
+# Example camera intrinsics. REPLACE with the output of calibrate_camera.py
+# for your own GoPro view -- these placeholder values will give wrong poses.
+#
+# model: "pinhole" (reframed/linear GoPro view) or "fisheye" (single lens).
+model: pinhole
+width: 1920
+height: 1080
+# 3x3 intrinsic matrix [[fx,0,cx],[0,fy,cy],[0,0,1]]
+camera_matrix:
+  - [1100.0, 0.0, 960.0]
+  - [0.0, 1100.0, 540.0]
+  - [0.0, 0.0, 1.0]
+# Brown-Conrady distortion [k1, k2, p1, p2, k3] (pinhole)
+# or [k1, k2, k3, k4] (fisheye).
+dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
