@@ -17,11 +17,14 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
+
 from .camera import open_camera
 from .camera.calibration import Undistorter
 from .config import CameraCalibration, MarkerMap, SystemConfig
 from .fusion import PoseEKF
 from .geometry import Pose2D
+from .imu import ImuPreintegrator, ImuSource
 from .markers import ArucoDetector, MarkerLocalizer
 from .odometry import VisualOdometry
 from .output import PoseLogger, PosePublisher, encode_pose_message
@@ -33,6 +36,8 @@ class FrameResult:
     n_markers: int
     fixed: bool
     timestamp: float
+    imu_samples: int = 0
+    stationary: bool = False
 
 
 class PositioningSystem:
@@ -53,6 +58,16 @@ class PositioningSystem:
         self.odometry = (
             VisualOdometry(config.odometry) if config.odometry.enabled else None
         )
+        # IMU fusion: a preintegrator is always available so callers can inject
+        # a live IMU source; the GPMF source is built here for offline replay.
+        self.preintegrator = ImuPreintegrator(config.imu)
+        self.imu_source: Optional[ImuSource] = None
+        if config.imu.source == "gpmf":
+            from .imu import GpmfImuSource
+
+            self.imu_source = GpmfImuSource(
+                config.imu.video_path, config.imu.time_offset_s
+            )
         self.ekf = PoseEKF(config.fusion)
         self.undistorter = (
             Undistorter(calibration) if _needs_undistort(calibration) else None
@@ -93,13 +108,25 @@ class PositioningSystem:
         if self.undistorter is not None:
             image = self.undistorter.undistort(image)
 
-        # 1. Predict with visual odometry (relative motion).
-        if self.odometry is not None:
-            est = self.odometry.process(image)
-            if est.valid and self.ekf.initialised:
-                self.ekf.predict(est.delta, est.cov)
+        # 1. Gather relative motion: visual odometry for translation, IMU for
+        #    heading.  The IMU samples are always drained (even before the
+        #    filter is initialised) so bias estimation and the integrator's
+        #    bridging state stay current.
+        vo_est = self.odometry.process(image) if self.odometry is not None else None
 
-        # 2. Update with every marker that is in the map (absolute fixes).
+        imu_inc = None
+        n_imu = 0
+        if self.imu_source is not None:
+            samples = self.imu_source.until(timestamp)
+            n_imu = len(samples)
+            imu_inc = self.preintegrator.integrate(samples)
+
+        # 2. Predict (only meaningful once an absolute fix has initialised us).
+        if self.ekf.initialised:
+            delta, cov = self._build_motion(vo_est, imu_inc)
+            self.ekf.predict(delta, cov)
+
+        # 3. Update with every marker that is in the map (absolute fixes).
         observations = self.detector.detect(image)
         fixes = self.localizer.fixes_from(observations)
         accepted = 0
@@ -113,9 +140,50 @@ class PositioningSystem:
             n_markers=accepted,
             fixed=self.ekf.initialised,
             timestamp=timestamp,
+            imu_samples=n_imu,
+            stationary=bool(imu_inc.stationary) if imu_inc is not None else False,
         )
         self._emit(result)
         return result
+
+    def _build_motion(self, vo_est, imu_inc):
+        """Combine VO (translation) and IMU (heading) into one EKF control.
+
+        Returns ``(delta, cov)`` where ``cov`` may be ``None`` to fall back on
+        the static process noise (used when no relative-motion source fired).
+        """
+        dx = dy = dth = 0.0
+        var_x = var_y = var_th = None
+
+        if vo_est is not None and vo_est.valid:
+            dx, dy, dth = vo_est.delta.x, vo_est.delta.y, vo_est.delta.theta
+            var_x = float(vo_est.cov[0, 0])
+            var_y = float(vo_est.cov[1, 1])
+            var_th = float(vo_est.cov[2, 2])
+
+        if imu_inc is not None and imu_inc.valid:
+            # The gyro heading is far better than VO's, so it takes over yaw.
+            dth = imu_inc.dtheta
+            var_th = float(imu_inc.variance)
+
+        if var_x is None and var_th is None:
+            # Nothing fired this frame: zero motion, default process noise so
+            # the covariance still grows to reflect the elapsed time.
+            return Pose2D(), None
+
+        f = self.config.fusion
+        cov = np.diag(
+            [
+                var_x if var_x is not None else f.process_std_xy ** 2,
+                var_y if var_y is not None else f.process_std_xy ** 2,
+                var_th if var_th is not None else f.process_std_theta ** 2,
+            ]
+        )
+        return Pose2D(dx, dy, dth), cov
+
+    def set_imu_source(self, source: ImuSource) -> None:
+        """Attach a live IMU source (e.g. an IMU wired to the Pi)."""
+        self.imu_source = source
 
     def _emit(self, result: FrameResult) -> None:
         # Always log; rate-limit the network publish.

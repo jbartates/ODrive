@@ -4,9 +4,10 @@ A self-contained indoor positioning system for a mobile robot. A **GoPro Max 2**
 in USB webcam mode feeds frames to a **Raspberry Pi 4** onboard the robot. The
 Pi detects **ArUco fiducial markers** placed at known positions in the room for
 absolute pose fixes, runs **visual odometry** for smooth motion between markers,
-and **fuses** the two with an Extended Kalman Filter. The fused pose
-`(x, y, heading)` is **published over the network** (UDP/TCP JSON) and **logged**
-to disk.
+optionally folds in the GoPro's **IMU telemetry** (gyro/accel/gravity from the
+GPMF metadata track) for accurate heading, and **fuses** everything with an
+Extended Kalman Filter. The fused pose `(x, y, heading)` is **published over the
+network** (UDP/TCP JSON) and **logged** to disk.
 
 This package is independent of the ODrive firmware in the rest of this repo — it
 runs as a normal Python program on the Pi and can optionally feed the ODrive a
@@ -17,7 +18,8 @@ GoPro Max 2 ──USB──► Raspberry Pi 4
                        │
    ┌───────────────────┴───────────────────────────────┐
    │ frame ─► undistort ─► ArUco detect ─► map localiser │  absolute fixes
-   │              └─────► visual odometry                │  relative motion
+   │              └─────► visual odometry (translation)  │  relative motion
+   │   GPMF IMU ─► preintegrate gyro (heading) ──────────┤  relative heading
    │                           └────► EKF fusion ────────┼─► UDP/TCP + JSONL log
    └────────────────────────────────────────────────────┘
 ```
@@ -30,6 +32,10 @@ GoPro Max 2 ──USB──► Raspberry Pi 4
 * **Odometry fusion** — between marker sightings, sparse optical-flow odometry
   keeps the pose smooth and fills momentary gaps. The EKF reconciles the two and
   rejects bad marker fixes with a Mahalanobis gate.
+* **IMU heading** — the GoPro's gyro gives a far better short-term heading than
+  vision. We project it onto the gravity vector so the estimate is independent
+  of how the camera is mounted, remove bias during stationary periods, and feed
+  it to the EKF's prediction step (see *IMU fusion* below).
 * **Decoupled output** — pose is published as plain JSON so *anything* can
   consume it (a navigation node, a plotter, or the ODrive control layer).
 
@@ -46,20 +52,26 @@ indoor_positioning/
 │   │   └── file_camera.py   #   replay video/images for offline testing
 │   ├── markers/             # ArUco detection + map-based localisation
 │   ├── odometry/            # sparse optical-flow visual odometry
+│   ├── imu/                 # GoPro GPMF/IMU telemetry + yaw preintegration
+│   │   ├── mp4.py           #   pure-python MP4 reader (finds the gpmd track)
+│   │   ├── gpmf.py          #   GPMF KLV parser (GYRO/ACCL/GRAV + SCAL)
+│   │   ├── source.py        #   GPMF + in-memory IMU sources
+│   │   └── preintegrator.py #   gravity-projected gyro -> yaw increment
 │   ├── fusion/ekf.py        # the EKF                       (pure numpy)
 │   ├── output/              # UDP/TCP publisher + JSONL logger
 │   └── system.py            # the orchestrator that wires it together
 ├── scripts/
 │   ├── run_positioning.py   # live entry point
 │   ├── calibrate_camera.py  # produce camera_calibration.yaml
-│   └── generate_markers.py  # printable ArUco markers
+│   ├── generate_markers.py  # printable ArUco markers
+│   └── dump_telemetry.py    # inspect a clip's IMU + pick imu.yaw_sign
 ├── config/                  # *.example.yaml — copy and edit
 └── tests/                   # pure-math unit tests (no camera needed)
 ```
 
 The heavy OpenCV-dependent pieces import `cv2` lazily, so the pure-math core
-(`geometry`, `config`, `fusion`, transform chain) is fully unit-tested without a
-camera or even OpenCV installed.
+(`geometry`, `config`, `fusion`, IMU/GPMF parsing, transform chain) is fully
+unit-tested without a camera or even OpenCV installed.
 
 ## Setup on the Raspberry Pi 4
 
@@ -157,10 +169,62 @@ One JSON object per UDP datagram / log line:
 * **Marker frame**: OpenCV convention — origin at the marker centre, +x right,
   +y up, +z out of the printed face.
 
+## IMU fusion (GoPro GPMF telemetry)
+
+The GoPro Max 2 records inertial telemetry — `GYRO`, `ACCL`, `GRAV` — into the
+**GPMF metadata track** of the MP4 it writes to the SD card. This package parses
+that track (a pure-Python MP4 reader + GPMF KLV parser, no ffmpeg required),
+converts the gyro into a heading-rate signal, and feeds it to the EKF's
+prediction step. Heading from a gyro is dramatically better over short
+timescales than vision-derived heading, so the fused pose is smoother and the
+between-marker drift is much smaller. Visual odometry still supplies the
+translation; the IMU takes over yaw.
+
+How the yaw is extracted (`ips/imu/preintegrator.py`):
+
+* **Mount-agnostic** — the gyro vector is projected onto the vertical axis
+  defined by gravity (`GRAV`, or low-passed `ACCL` as a fallback), so it doesn't
+  matter how the camera is tilted or rotated on the robot.
+* **Bias removal** — while the robot is detected stationary (gyro magnitude
+  below `imu.stationary_gyro_thresh`) the gyro bias is learned online and a
+  rotational zero-velocity update (ZUPT) stops the heading from creeping.
+* **Honest covariance** — each yaw increment carries a variance from the gyro
+  noise model, so the EKF weighs it correctly against the marker fixes.
+
+> **Important:** GPMF telemetry is **not** present in the live USB-webcam (UVC)
+> stream — only in recorded clips. So there are two ways to use it:
+>
+> 1. **Offline replay** of a recording (full IMU fusion). Point both the camera
+>    and the IMU at the same MP4:
+>    ```yaml
+>    camera: { source: file, device: /path/clip.MP4 }
+>    imu:    { source: gpmf, video_path: /path/clip.MP4 }
+>    ```
+>    The file camera emits presentation timestamps so video and IMU stay aligned.
+> 2. **Live** runs carry no GoPro telemetry. Either record + post-process, or
+>    wire a separate IMU to the Pi and push samples in:
+>    ```python
+>    from ips.imu import ListImuSource, ImuSample
+>    system.set_imu_source(ListImuSource([...]))  # or a custom ImuSource
+>    ```
+
+Inspect a clip's telemetry and choose the heading sign:
+
+```bash
+python scripts/dump_telemetry.py my_clip.MP4 --plot heading.csv
+```
+
+Turn the robot a known direction (say, left/CCW) while recording; if the
+reported net heading change has the wrong sign, set `imu.yaw_sign: -1.0`.
+
 ## Tuning notes
 
 * `odometry.flow_scale_m` converts image flow to metres; drive a known distance
   and scale it until the dead-reckoned distance matches.
+* `imu.gyro_noise_std` sets how much the EKF trusts the gyro heading; lower it
+  if heading is noisy-but-unbiased, raise it if the gyro is drifting.
+* `imu.yaw_sign` flips heading direction; `imu.stationary_gyro_thresh` controls
+  when bias learning / ZUPT kicks in.
 * `fusion.process_std_*` controls how fast the estimate is allowed to move on
   odometry alone; `fusion.marker_std_*` controls how strongly markers pull it.
 * `fusion.mahalanobis_gate` rejects inconsistent marker fixes — lower it if a
@@ -186,10 +250,12 @@ motor I/O and can be reused for non-ODrive robots.
 
 ```bash
 pip install numpy pyyaml pytest
-python -m pytest          # 33 tests, no camera/OpenCV required
+python -m pytest          # 50 tests, no camera/OpenCV required
 ```
 
 The tests cover the geometry helpers, the EKF (prediction, update, angle
 wrapping, outlier gating, covariance symmetry, dead-reckon-then-correct), the
-full marker→world transform chain, config/marker-map loading, and the UDP
-publisher round-trip.
+full marker→world transform chain, config/marker-map loading, the UDP publisher
+round-trip, the GPMF KLV parser + MP4 sample-table maths, and IMU preintegration
+(constant-rate integration, gravity-projection tilt invariance, bias/ZUPT,
+cross-batch bridging, and the IMU→EKF heading update).

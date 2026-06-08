@@ -44,10 +44,16 @@ class FileCamera(CameraSource):
         import cv2
 
         if self._is_video:
+            # Presentation time BEFORE grabbing this frame == its start time,
+            # so it shares the "seconds from start" clock that GPMF telemetry
+            # uses, letting the IMU and video be aligned in offline replay.
+            pos_ms = self._cap.get(cv2.CAP_PROP_POS_MSEC)
             ok, image = self._cap.read()
             if not ok or image is None:
                 return None
-            return Frame(image=image, index=self._next_index())
+            idx = self._next_index()
+            timestamp = pos_ms / 1000.0 if pos_ms and pos_ms > 0 else float(idx)
+            return Frame(image=image, timestamp=timestamp, index=idx)
 
         if self._index >= len(self._image_paths):
             return None
@@ -55,7 +61,8 @@ class FileCamera(CameraSource):
         idx = self._next_index()
         if image is None:  # pragma: no cover - corrupt image
             return None
-        return Frame(image=image, index=idx)
+        fps = self.config.fps or 30
+        return Frame(image=image, timestamp=idx / float(fps), index=idx)
 
     def close(self) -> None:
         if self._cap is not None:

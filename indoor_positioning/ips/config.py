@@ -126,6 +126,34 @@ class FusionConfig:
 
 
 @dataclass
+class ImuConfig:
+    """How to obtain and integrate IMU telemetry.
+
+    The GoPro logs IMU data in the GPMF metadata track of recorded MP4s, so
+    ``source: gpmf`` is for offline / replay runs.  ``source: none`` disables
+    IMU fusion (the default for a live USB-webcam run, which carries no
+    telemetry).  Supply ``video_path`` for the GPMF source.
+    """
+
+    source: str = "none"  # "none" | "gpmf"
+    video_path: str = ""  # MP4 to read GPMF telemetry from
+    time_offset_s: float = 0.0  # add to IMU timestamps to align with frames
+    # Yaw extraction
+    use_gravity: bool = True  # project gyro onto the gravity vector
+    yaw_axis: int = 2  # gyro axis used when gravity is unavailable
+    yaw_sign: float = 1.0  # flip if heading turns the wrong way
+    # Bias / stationary handling
+    stationary_gyro_thresh: float = 0.04  # rad/s; below this we treat as still
+    bias_learn_rate: float = 0.02  # EMA rate for gyro-bias estimation
+    # Noise model
+    gyro_noise_std: float = 0.01  # rad/s, per-axis white noise
+    min_variance: float = 1e-6  # rad^2 floor on a yaw increment
+    stationary_variance: float = 1e-8  # rad^2 for a ZUPT-clamped increment
+    fallback_variance: float = 1.0  # rad^2 when no IMU samples are available
+    max_gap_s: float = 0.5  # ignore integration steps with a larger gap
+
+
+@dataclass
 class OutputConfig:
     publish: bool = True
     protocol: str = "udp"  # "udp" | "tcp"
@@ -141,6 +169,7 @@ class SystemConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     detector: MarkerDetectorConfig = field(default_factory=MarkerDetectorConfig)
     odometry: OdometryConfig = field(default_factory=OdometryConfig)
+    imu: ImuConfig = field(default_factory=ImuConfig)
     fusion: FusionConfig = field(default_factory=FusionConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
 
@@ -153,6 +182,7 @@ class SystemConfig:
             camera=sub("camera", CameraConfig),
             detector=sub("detector", MarkerDetectorConfig),
             odometry=sub("odometry", OdometryConfig),
+            imu=sub("imu", ImuConfig),
             fusion=sub("fusion", FusionConfig),
             output=sub("output", OutputConfig),
         )

@@ -30,6 +30,21 @@ odometry:
   flow_scale_m: 0.5         # tune so VO distance roughly matches reality
   min_tracked_features: 12
 
+imu:
+  # GoPro IMU telemetry lives in the GPMF track of recorded MP4s, NOT in the
+  # live USB-webcam stream. Use source: gpmf for offline replay of a clip
+  # (set camera.source: file + camera.device to the same MP4), or source: none
+  # for a live run (you may inject a separate IMU via set_imu_source()).
+  source: none              # none | gpmf
+  video_path: ""            # MP4 to read GPMF telemetry from (source: gpmf)
+  time_offset_s: 0.0        # shift IMU clock to align with frames if needed
+  use_gravity: true         # project gyro onto gravity -> mount-agnostic yaw
+  yaw_axis: 2               # gyro axis used only if gravity is unavailable
+  yaw_sign: 1.0             # flip to -1 if the heading turns the wrong way
+  stationary_gyro_thresh: 0.04  # rad/s; below this the robot is "still" (ZUPT)
+  bias_learn_rate: 0.02     # EMA rate for online gyro-bias estimation
+  gyro_noise_std: 0.01      # rad/s per-axis white noise (sets yaw trust)
+
 fusion:
   process_std_xy: 0.05      # m per prediction step
   process_std_theta: 0.02   # rad per prediction step
