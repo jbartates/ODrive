@@ -65,7 +65,8 @@ indoor_positioning/
 │   ├── run_positioning.py   # live entry point
 │   ├── calibrate_camera.py  # produce camera_calibration.yaml
 │   ├── generate_markers.py  # printable ArUco markers
-│   └── dump_telemetry.py    # inspect a clip's IMU + pick imu.yaw_sign
+│   ├── imu_monitor.py       # live WitMotion check: port/baud/rate/yaw_sign
+│   └── dump_telemetry.py    # inspect a clip's GoPro IMU + pick imu.yaw_sign
 ├── config/                  # *.example.yaml — copy and edit
 └── tests/                   # pure-math unit tests (no camera needed)
 ```
@@ -200,7 +201,16 @@ monotonic clock as the camera frames — so live fusion just works.
 # Find the device and grant serial access (log out/in after the usermod):
 ls -l /dev/ttyUSB*            # e.g. /dev/ttyUSB0
 sudo usermod -aG dialout "$USER"
+
+# Verify port/baud/rate and the heading sign BEFORE running the pipeline:
+python scripts/imu_monitor.py --port /dev/ttyUSB0 --baud 9600
 ```
+
+`imu_monitor.py` prints the live gyro/accel, the sample rate, and an integrated
+heading. Confirm samples arrive at a healthy rate (aim for >= 100 Hz; raise the
+SINDT's output rate in the WitMotion config tool if it is low), then turn the
+robot left/CCW and check the heading increases — if it decreases, use
+`--yaw-sign -1` here and set `imu.yaw_sign: -1.0` in your config.
 
 ```yaml
 imu:
