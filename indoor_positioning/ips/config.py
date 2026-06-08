@@ -135,9 +135,14 @@ class ImuConfig:
     telemetry).  Supply ``video_path`` for the GPMF source.
     """
 
-    source: str = "none"  # "none" | "gpmf"
-    video_path: str = ""  # MP4 to read GPMF telemetry from
+    source: str = "none"  # "none" | "gpmf" | "witmotion"
+    video_path: str = ""  # MP4 to read GPMF telemetry from (source: gpmf)
     time_offset_s: float = 0.0  # add to IMU timestamps to align with frames
+    # WitMotion SINDT serial settings (source: witmotion)
+    port: str = "/dev/ttyUSB0"  # USB-serial device the SINDT enumerates as
+    baud: int = 9600  # SINDT default; set to whatever the unit is configured to
+    gyro_range_dps: float = 2000.0  # full-scale gyro range (deg/s)
+    accel_range_g: float = 16.0  # full-scale accel range (g)
     # Yaw extraction
     use_gravity: bool = True  # project gyro onto the gravity vector
     yaw_axis: int = 2  # gyro axis used when gravity is unavailable

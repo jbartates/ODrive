@@ -20,6 +20,7 @@ setup(
     ],
     extras_require={
         "camera": ["opencv-contrib-python>=4.6"],
+        "imu": ["pyserial>=3.5"],  # WitMotion SINDT over USB
         "test": ["pytest>=6.0"],
     },
 )

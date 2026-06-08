@@ -68,6 +68,10 @@ class PositioningSystem:
             self.imu_source = GpmfImuSource(
                 config.imu.video_path, config.imu.time_offset_s
             )
+        elif config.imu.source == "witmotion":
+            from .imu import WitmotionImuSource
+
+            self.imu_source = WitmotionImuSource(config.imu)
         self.ekf = PoseEKF(config.fusion)
         self.undistorter = (
             Undistorter(calibration) if _needs_undistort(calibration) else None
@@ -217,6 +221,8 @@ class PositioningSystem:
             self.publisher.open()
         if self.logger is not None:
             self.logger.open()
+        if self.imu_source is not None:
+            self.imu_source.start()
 
         count = 0
         try:
@@ -234,6 +240,8 @@ class PositioningSystem:
             self.publisher.close()
         if self.logger is not None:
             self.logger.close()
+        if self.imu_source is not None:
+            self.imu_source.close()
 
 
 def _needs_undistort(calibration: CameraCalibration) -> bool:

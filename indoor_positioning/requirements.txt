@@ -4,3 +4,4 @@
 numpy>=1.21
 opencv-contrib-python>=4.6     # contrib build is required for cv2.aruco
 PyYAML>=5.4
+pyserial>=3.5                  # WitMotion SINDT IMU over USB (imu.source: witmotion)

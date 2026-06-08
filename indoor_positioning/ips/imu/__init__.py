@@ -14,12 +14,15 @@ from any other IMU through :class:`ListImuSource`.
 from .sample import ImuSample
 from .source import GpmfImuSource, ImuSource, ListImuSource
 from .preintegrator import ImuPreintegrator, YawIncrement
+from .witmotion import WitmotionDecoder, WitmotionImuSource
 
 __all__ = [
     "ImuSample",
     "ImuSource",
     "GpmfImuSource",
     "ListImuSource",
+    "WitmotionImuSource",
+    "WitmotionDecoder",
     "ImuPreintegrator",
     "YawIncrement",
 ]

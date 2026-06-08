@@ -4,8 +4,8 @@ A self-contained indoor positioning system for a mobile robot. A **GoPro Max 2**
 in USB webcam mode feeds frames to a **Raspberry Pi 4** onboard the robot. The
 Pi detects **ArUco fiducial markers** placed at known positions in the room for
 absolute pose fixes, runs **visual odometry** for smooth motion between markers,
-optionally folds in the GoPro's **IMU telemetry** (gyro/accel/gravity from the
-GPMF metadata track) for accurate heading, and **fuses** everything with an
+folds in an **IMU** for accurate heading (a **WitMotion SINDT** over USB live, or
+the GoPro's GPMF telemetry for offline replay), and **fuses** everything with an
 Extended Kalman Filter. The fused pose `(x, y, heading)` is **published over the
 network** (UDP/TCP JSON) and **logged** to disk.
 
@@ -19,7 +19,7 @@ GoPro Max 2 ──USB──► Raspberry Pi 4
    ┌───────────────────┴───────────────────────────────┐
    │ frame ─► undistort ─► ArUco detect ─► map localiser │  absolute fixes
    │              └─────► visual odometry (translation)  │  relative motion
-   │   GPMF IMU ─► preintegrate gyro (heading) ──────────┤  relative heading
+   │   IMU (WitMotion USB / GPMF) ─► preintegrate gyro ──┤  relative heading
    │                           └────► EKF fusion ────────┼─► UDP/TCP + JSONL log
    └────────────────────────────────────────────────────┘
 ```
@@ -52,9 +52,10 @@ indoor_positioning/
 │   │   └── file_camera.py   #   replay video/images for offline testing
 │   ├── markers/             # ArUco detection + map-based localisation
 │   ├── odometry/            # sparse optical-flow visual odometry
-│   ├── imu/                 # GoPro GPMF/IMU telemetry + yaw preintegration
+│   ├── imu/                 # IMU telemetry + yaw preintegration
+│   │   ├── witmotion.py     #   WitMotion SINDT USB-serial source + decoder
 │   │   ├── mp4.py           #   pure-python MP4 reader (finds the gpmd track)
-│   │   ├── gpmf.py          #   GPMF KLV parser (GYRO/ACCL/GRAV + SCAL)
+│   │   ├── gpmf.py          #   GoPro GPMF KLV parser (GYRO/ACCL/GRAV + SCAL)
 │   │   ├── source.py        #   GPMF + in-memory IMU sources
 │   │   └── preintegrator.py #   gravity-projected gyro -> yaw increment
 │   ├── fusion/ekf.py        # the EKF                       (pure numpy)
@@ -169,53 +170,76 @@ One JSON object per UDP datagram / log line:
 * **Marker frame**: OpenCV convention — origin at the marker centre, +x right,
   +y up, +z out of the printed face.
 
-## IMU fusion (GoPro GPMF telemetry)
+## IMU fusion
 
-The GoPro Max 2 records inertial telemetry — `GYRO`, `ACCL`, `GRAV` — into the
-**GPMF metadata track** of the MP4 it writes to the SD card. This package parses
-that track (a pure-Python MP4 reader + GPMF KLV parser, no ffmpeg required),
-converts the gyro into a heading-rate signal, and feeds it to the EKF's
-prediction step. Heading from a gyro is dramatically better over short
-timescales than vision-derived heading, so the fused pose is smoother and the
-between-marker drift is much smaller. Visual odometry still supplies the
-translation; the IMU takes over yaw.
+A gyro gives a far better short-term heading than vision, so the IMU drives the
+EKF's prediction step for yaw while visual odometry supplies the translation.
+The fused pose is smoother and the between-marker drift is much smaller.
 
-How the yaw is extracted (`ips/imu/preintegrator.py`):
+How the yaw is extracted (`ips/imu/preintegrator.py`), the same for every IMU
+source:
 
 * **Mount-agnostic** — the gyro vector is projected onto the vertical axis
-  defined by gravity (`GRAV`, or low-passed `ACCL` as a fallback), so it doesn't
-  matter how the camera is tilted or rotated on the robot.
+  defined by gravity (accelerometer, or the GoPro `GRAV` stream), so it doesn't
+  matter how the IMU is tilted or rotated on the robot.
 * **Bias removal** — while the robot is detected stationary (gyro magnitude
   below `imu.stationary_gyro_thresh`) the gyro bias is learned online and a
   rotational zero-velocity update (ZUPT) stops the heading from creeping.
 * **Honest covariance** — each yaw increment carries a variance from the gyro
-  noise model, so the EKF weighs it correctly against the marker fixes.
+  noise model (`imu.gyro_noise_std`), so the EKF weighs it correctly against the
+  marker fixes.
 
-> **Important:** GPMF telemetry is **not** present in the live USB-webcam (UVC)
-> stream — only in recorded clips. So there are two ways to use it:
->
-> 1. **Offline replay** of a recording (full IMU fusion). Point both the camera
->    and the IMU at the same MP4:
->    ```yaml
->    camera: { source: file, device: /path/clip.MP4 }
->    imu:    { source: gpmf, video_path: /path/clip.MP4 }
->    ```
->    The file camera emits presentation timestamps so video and IMU stay aligned.
-> 2. **Live** runs carry no GoPro telemetry. Either record + post-process, or
->    wire a separate IMU to the Pi and push samples in:
->    ```python
->    from ips.imu import ListImuSource, ImuSample
->    system.set_imu_source(ListImuSource([...]))  # or a custom ImuSource
->    ```
+### WitMotion SINDT over USB (live — recommended)
 
-Inspect a clip's telemetry and choose the heading sign:
+The SINDT enumerates as a USB-serial device (CH340) and streams WitMotion's
+binary protocol. This package reads it on a background thread, decodes the
+acceleration (0x51) and gyro (0x52) frames, and timestamps samples on the same
+monotonic clock as the camera frames — so live fusion just works.
+
+```bash
+# Find the device and grant serial access (log out/in after the usermod):
+ls -l /dev/ttyUSB*            # e.g. /dev/ttyUSB0
+sudo usermod -aG dialout "$USER"
+```
+
+```yaml
+imu:
+  source: witmotion
+  port: /dev/ttyUSB0
+  baud: 9600                  # match the SINDT's configured baud
+  gyro_range_dps: 2000.0      # match the SINDT's configured ranges
+  accel_range_g: 16.0
+  yaw_sign: 1.0               # flip to -1 if heading turns the wrong way
+```
+
+The SINDT is a 6-axis unit (no magnetometer), so its *absolute* yaw angle would
+drift — we deliberately use only its gyro (for rate) and accel (for the gravity
+reference), which is exactly what the drift-corrected EKF + marker fixes want.
+To set `yaw_sign`, turn the robot a known direction (e.g. left/CCW) and check
+that the published `theta` increases; if not, set `yaw_sign: -1.0`.
+
+You can also attach any other IMU at runtime by implementing an `ImuSource` (or
+reusing `ListImuSource`) and calling `system.set_imu_source(...)`.
+
+### GoPro GPMF telemetry (offline replay)
+
+The GoPro Max 2 also logs `GYRO`/`ACCL`/`GRAV` into the **GPMF metadata track**
+of the MP4 it records to the SD card. This package parses that track directly
+(pure-Python MP4 reader + GPMF KLV parser, no ffmpeg). GPMF is **not** present in
+the live USB-webcam (UVC) stream, so this path is for replaying a recording —
+point both the camera and the IMU at the same MP4:
+
+```yaml
+camera: { source: file, device: /path/clip.MP4 }
+imu:    { source: gpmf, video_path: /path/clip.MP4 }
+```
+
+The file camera emits presentation timestamps so video and IMU stay aligned.
+Inspect a clip's telemetry and pick its `yaw_sign` with:
 
 ```bash
 python scripts/dump_telemetry.py my_clip.MP4 --plot heading.csv
 ```
-
-Turn the robot a known direction (say, left/CCW) while recording; if the
-reported net heading change has the wrong sign, set `imu.yaw_sign: -1.0`.
 
 ## Tuning notes
 
@@ -250,12 +274,13 @@ motor I/O and can be reused for non-ODrive robots.
 
 ```bash
 pip install numpy pyyaml pytest
-python -m pytest          # 50 tests, no camera/OpenCV required
+python -m pytest          # 57 tests, no camera/OpenCV/serial required
 ```
 
 The tests cover the geometry helpers, the EKF (prediction, update, angle
 wrapping, outlier gating, covariance symmetry, dead-reckon-then-correct), the
 full marker→world transform chain, config/marker-map loading, the UDP publisher
-round-trip, the GPMF KLV parser + MP4 sample-table maths, and IMU preintegration
+round-trip, the GPMF KLV parser + MP4 sample-table maths, IMU preintegration
 (constant-rate integration, gravity-projection tilt invariance, bias/ZUPT,
-cross-batch bridging, and the IMU→EKF heading update).
+cross-batch bridging, the IMU→EKF heading update), and the WitMotion SINDT
+protocol decoder (frame parsing, scaling, signedness, resync, split frames).

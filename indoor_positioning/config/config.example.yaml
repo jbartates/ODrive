@@ -31,12 +31,20 @@ odometry:
   min_tracked_features: 12
 
 imu:
-  # GoPro IMU telemetry lives in the GPMF track of recorded MP4s, NOT in the
-  # live USB-webcam stream. Use source: gpmf for offline replay of a clip
-  # (set camera.source: file + camera.device to the same MP4), or source: none
-  # for a live run (you may inject a separate IMU via set_imu_source()).
-  source: none              # none | gpmf
-  video_path: ""            # MP4 to read GPMF telemetry from (source: gpmf)
+  # IMU heading source for the fusion. Options:
+  #   witmotion : WitMotion SINDT plugged into the Pi over USB (live).  <-- use this
+  #   gpmf      : GoPro IMU from a recorded MP4's GPMF track (offline replay only;
+  #               set camera.source: file + camera.device to the same MP4).
+  #   none      : disable IMU fusion.
+  source: witmotion         # none | gpmf | witmotion
+  # --- WitMotion SINDT (source: witmotion) ---
+  port: /dev/ttyUSB0        # USB-serial device the SINDT shows up as (CH340)
+  baud: 9600                # SINDT default; match the unit's configured baud
+  gyro_range_dps: 2000.0    # full-scale gyro range the SINDT is set to
+  accel_range_g: 16.0       # full-scale accel range the SINDT is set to
+  # --- GoPro GPMF (source: gpmf) ---
+  video_path: ""            # MP4 to read GPMF telemetry from
+  # --- shared ---
   time_offset_s: 0.0        # shift IMU clock to align with frames if needed
   use_gravity: true         # project gyro onto gravity -> mount-agnostic yaw
   yaw_axis: 2               # gyro axis used only if gravity is unavailable

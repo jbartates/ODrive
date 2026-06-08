@@ -38,6 +38,12 @@ class ImuSource(abc.ABC):
     def reset(self) -> None:
         self._cursor = 0
 
+    def start(self) -> None:
+        """Begin acquiring samples. No-op for offline/in-memory sources."""
+
+    def close(self) -> None:
+        """Release any resources. No-op for offline/in-memory sources."""
+
     def until(self, t: float) -> List[ImuSample]:
         """Return (and consume) all unread samples with ``sample.t <= t``."""
         out: List[ImuSample] = []
